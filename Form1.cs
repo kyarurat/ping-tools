@@ -1,4 +1,5 @@
 using System.Drawing.Drawing2D;
+using System.IO;
 using System.Net;
 using System.Net.NetworkInformation;
 
@@ -39,11 +40,21 @@ namespace PingTools
         public Form1()
         {
             InitializeComponent();
+            ApplyWindowIcon();
             BuildInterface();
             ResetDashboard();
             SetRunningState(false);
             FormClosing += Form1_FormClosing;
             Shown += (_, _) => FocusTargetInput();
+        }
+
+        private void ApplyWindowIcon()
+        {
+            var iconPath = Path.Combine(AppContext.BaseDirectory, "app.ico");
+            if (File.Exists(iconPath))
+            {
+                Icon = new Icon(iconPath);
+            }
         }
 
         private void BuildInterface()
