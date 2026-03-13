@@ -15,6 +15,7 @@ namespace PingTools
         private CancellationTokenSource? probeCancellation;
         private bool isRunning;
         private bool isResolvingTarget;
+        private string? pendingToolTarget;
 
         private Label headerStatusBadge = null!;
         private Label avgValueLabel = null!;
@@ -26,6 +27,7 @@ namespace PingTools
         private NumericUpDown countInput = null!;
         private NumericUpDown timeoutInput = null!;
         private NumericUpDown intervalInput = null!;
+        private Button toolsButton = null!;
         private Button startButton = null!;
         private Button stopButton = null!;
         private Button clearButton = null!;
@@ -103,7 +105,6 @@ namespace PingTools
                 TextAlign = ContentAlignment.MiddleCenter,
                 Anchor = AnchorStyles.Top | AnchorStyles.Right,
             };
-
             panel.Controls.Add(title);
             panel.Controls.Add(subtitle);
             panel.Controls.Add(headerStatusBadge);
@@ -132,10 +133,11 @@ namespace PingTools
             configLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3333F));
             configLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-            var buttonLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = new Padding(0, 6, 0, 0) };
-            buttonLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3333F));
-            buttonLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3333F));
-            buttonLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3333F));
+            var buttonLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 1, Margin = new Padding(0, 6, 0, 0) };
+            buttonLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25F));
+            buttonLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25F));
+            buttonLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25F));
+            buttonLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25F));
             buttonLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
             targetTextBox = new TextBox
@@ -150,10 +152,12 @@ namespace PingTools
             countInput = CreateNumeric(0, -9999, 9999, 1);
             timeoutInput = CreateNumeric(1000, 100, 10000, 100);
             intervalInput = CreateNumeric(1000, 100, 5000, 100);
+            toolsButton = CreateOutlineButton("工具");
             startButton = CreateActionButton("开始探测", Color.FromArgb(14, 165, 233), Color.White);
             stopButton = CreateActionButton("停止", Color.FromArgb(255, 244, 229), Color.FromArgb(194, 65, 12));
             clearButton = CreateOutlineButton("清空数据");
 
+            toolsButton.Click += toolsButton_Click;
             startButton.Click += startButton_Click;
             stopButton.Click += stopButton_Click;
             clearButton.Click += clearButton_Click;
@@ -165,12 +169,14 @@ namespace PingTools
             configLayout.Controls.Add(CreateConfigField("超时值", timeoutInput), 1, 0);
             configLayout.Controls.Add(CreateConfigField("间隔值", intervalInput), 2, 0);
 
+            toolsButton.Dock = DockStyle.Fill;
             startButton.Dock = DockStyle.Fill;
             stopButton.Dock = DockStyle.Fill;
             clearButton.Dock = DockStyle.Fill;
-            buttonLayout.Controls.Add(startButton, 0, 0);
-            buttonLayout.Controls.Add(stopButton, 1, 0);
-            buttonLayout.Controls.Add(clearButton, 2, 0);
+            buttonLayout.Controls.Add(toolsButton, 0, 0);
+            buttonLayout.Controls.Add(startButton, 1, 0);
+            buttonLayout.Controls.Add(stopButton, 2, 0);
+            buttonLayout.Controls.Add(clearButton, 3, 0);
 
             layout.Controls.Add(leftLayout, 0, 0);
             layout.SetRowSpan(leftLayout, 2);
@@ -434,6 +440,20 @@ namespace PingTools
                     probeCancellation = null;
                     UpdateSummary();
                     FocusTargetInput(selectAll: false);
+
+                    if (!string.IsNullOrWhiteSpace(pendingToolTarget))
+                    {
+                        var nextTarget = pendingToolTarget;
+                        pendingToolTarget = null;
+                        BeginInvoke(() =>
+                        {
+                            if (!IsDisposed && !string.IsNullOrWhiteSpace(nextTarget))
+                            {
+                                targetTextBox.Text = nextTarget;
+                                startButton.PerformClick();
+                            }
+                        });
+                    }
                 }
             }
         }
@@ -867,6 +887,45 @@ namespace PingTools
             {
                 targetTextBox.SelectAll();
             }
+        }
+
+        private void toolsButton_Click(object? sender, EventArgs e)
+        {
+            using var toolsForm = new ToolsForm(this);
+            toolsForm.ShowDialog(this);
+        }
+
+        internal bool RequestToolProbe(string target)
+        {
+            if (isResolvingTarget)
+            {
+                MessageBox.Show(this, "当前正在解析域名，请稍后再试。", "PingTools", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return false;
+            }
+
+            if (isRunning)
+            {
+                var result = MessageBox.Show(
+                    this,
+                    $"当前任务正在执行，是否停止当前任务并开始探测 {target}？",
+                    "PingTools",
+                    MessageBoxButtons.OKCancel,
+                    MessageBoxIcon.Question);
+
+                if (result != DialogResult.OK)
+                {
+                    return false;
+                }
+
+                pendingToolTarget = target;
+                stopButton.PerformClick();
+                return true;
+            }
+
+            targetTextBox.Text = target;
+            FocusTargetInput();
+            startButton.PerformClick();
+            return true;
         }
 
         private void AddEvent(string message)
