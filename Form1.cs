@@ -1,10 +1,19 @@
 using System.Drawing.Drawing2D;
+using System.Net.NetworkInformation;
 
 namespace PingTools
 {
     public partial class Form1 : Form
     {
-        private readonly int[] previewLatency = [18, 20, 19, 24, 23, 27, 21, 25, 29, 26, 22, 24];
+        private const int MaxTimelineSamples = 20;
+        private const int MaxEventItems = 8;
+
+        private readonly List<PingSample> samples = [];
+        private readonly List<long?> timelineSamples = [];
+
+        private CancellationTokenSource? probeCancellation;
+        private bool isRunning;
+
         private Label headerStatusBadge = null!;
         private Label avgValueLabel = null!;
         private Label maxValueLabel = null!;
@@ -25,7 +34,9 @@ namespace PingTools
         {
             InitializeComponent();
             BuildInterface();
-            SeedPreviewData();
+            ResetDashboard();
+            SetRunningState(false);
+            FormClosing += Form1_FormClosing;
         }
 
         private void BuildInterface()
@@ -63,16 +74,27 @@ namespace PingTools
             var panel = CreateCard(Color.FromArgb(15, 23, 42), new Padding(24, 20, 24, 20));
             panel.Margin = new Padding(0, 0, 0, 16);
 
-            var title = new Label { AutoSize = true, Font = new Font("Microsoft YaHei UI", 22F, FontStyle.Bold), ForeColor = Color.White, Text = "PingTools 控制台", Location = new Point(24, 15) };
-            var subtitle = new Label { AutoSize = true, Font = new Font("Microsoft YaHei UI", 10.5F), ForeColor = Color.FromArgb(148, 163, 184), Text = "Visual ICMP dashboard for latency, packet loss and reachability", Location = new Point(27, 61) };
+            var title = new Label
+            {
+                AutoSize = true,
+                Font = new Font("Microsoft YaHei UI", 22F, FontStyle.Bold),
+                ForeColor = Color.White,
+                Text = "PingTools 控制台",
+                Location = new Point(24, 15),
+            };
+            var subtitle = new Label
+            {
+                AutoSize = true,
+                Font = new Font("Microsoft YaHei UI", 10.5F),
+                ForeColor = Color.FromArgb(148, 163, 184),
+                Text = "Visual ICMP dashboard for latency, packet loss and reachability",
+                Location = new Point(27, 61),
+            };
             headerStatusBadge = new Label
             {
                 Size = new Size(195, 36),
                 Location = new Point(1030, 26),
-                BackColor = Color.FromArgb(30, 41, 59),
-                ForeColor = Color.FromArgb(125, 211, 252),
                 Font = new Font("Microsoft YaHei UI", 10.5F, FontStyle.Bold),
-                Text = "READY  ·  WAITING",
                 TextAlign = ContentAlignment.MiddleCenter,
                 Anchor = AnchorStyles.Top | AnchorStyles.Right,
             };
@@ -162,10 +184,10 @@ namespace PingTools
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25F));
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25F));
 
-            avgValueLabel = CreateMetricCard(layout, 0, Color.FromArgb(14, 165, 233), "平均延迟", "23 ms", Color.FromArgb(224, 242, 254));
-            maxValueLabel = CreateMetricCard(layout, 1, Color.FromArgb(37, 99, 235), "峰值延迟", "31 ms", Color.FromArgb(219, 234, 254));
-            lossValueLabel = CreateMetricCard(layout, 2, Color.FromArgb(251, 146, 60), "丢包率估计", "0 %", Color.FromArgb(255, 237, 213));
-            healthValueLabel = CreateMetricCard(layout, 3, Color.FromArgb(15, 118, 110), "链路健康度", "优良", Color.FromArgb(204, 251, 241));
+            avgValueLabel = CreateMetricCard(layout, 0, Color.FromArgb(14, 165, 233), "平均延迟", "--", Color.FromArgb(224, 242, 254));
+            maxValueLabel = CreateMetricCard(layout, 1, Color.FromArgb(37, 99, 235), "峰值延迟", "--", Color.FromArgb(219, 234, 254));
+            lossValueLabel = CreateMetricCard(layout, 2, Color.FromArgb(251, 146, 60), "丢包率估计", "--", Color.FromArgb(255, 237, 213));
+            healthValueLabel = CreateMetricCard(layout, 3, Color.FromArgb(15, 118, 110), "链路健康度", "待机", Color.FromArgb(204, 251, 241));
             return layout;
         }
 
@@ -226,7 +248,7 @@ namespace PingTools
             var card = CreateCard(Color.White, new Padding(18));
             card.Margin = new Padding(0, 0, 0, 12);
             card.Controls.Add(new Label { AutoSize = true, Font = new Font("Microsoft YaHei UI", 13F, FontStyle.Bold), ForeColor = Color.FromArgb(15, 23, 42), Text = "延迟波形", Location = new Point(18, 16) });
-            card.Controls.Add(new Label { AutoSize = true, Font = new Font("Microsoft YaHei UI", 9.5F), ForeColor = Color.FromArgb(100, 116, 139), Text = "右侧波形区用于承载后续实时延迟折线图", Location = new Point(21, 42) });
+            card.Controls.Add(new Label { AutoSize = true, Font = new Font("Microsoft YaHei UI", 9.5F), ForeColor = Color.FromArgb(100, 116, 139), Text = "展示最近探测样本，用于观察网络抖动与瞬时波峰", Location = new Point(21, 42) });
 
             timelineCanvas = new Panel { Dock = DockStyle.Bottom, Height = 124, BackColor = Color.FromArgb(248, 250, 252) };
             timelineCanvas.Paint += timelineCanvas_Paint;
@@ -239,7 +261,7 @@ namespace PingTools
             var card = CreateCard(Color.White, new Padding(18));
             card.Margin = new Padding(0, 12, 0, 0);
             card.Controls.Add(new Label { AutoSize = true, Font = new Font("Microsoft YaHei UI", 13F, FontStyle.Bold), ForeColor = Color.FromArgb(15, 23, 42), Text = "操作事件", Location = new Point(18, 16) });
-            card.Controls.Add(new Label { AutoSize = true, Font = new Font("Microsoft YaHei UI", 9.5F), ForeColor = Color.FromArgb(100, 116, 139), Text = "记录开始、停止、清空与状态切换等事件", Location = new Point(21, 42) });
+            card.Controls.Add(new Label { AutoSize = true, Font = new Font("Microsoft YaHei UI", 9.5F), ForeColor = Color.FromArgb(100, 116, 139), Text = "记录开始、停止、清空与探测异常等关键事件", Location = new Point(21, 42) });
 
             eventsListBox = new ListBox
             {
@@ -300,8 +322,9 @@ namespace PingTools
             return layout;
         }
 
-        private static Button CreateActionButton(string text, Color backColor, Color foreColor) =>
-            new()
+        private static Button CreateActionButton(string text, Color backColor, Color foreColor)
+        {
+            var button = new Button
             {
                 FlatStyle = FlatStyle.Flat,
                 BackColor = backColor,
@@ -310,6 +333,9 @@ namespace PingTools
                 Text = text,
                 Margin = new Padding(0, 0, 12, 0),
             };
+            button.FlatAppearance.BorderSize = 0;
+            return button;
+        }
 
         private static Button CreateOutlineButton(string text)
         {
@@ -352,7 +378,7 @@ namespace PingTools
                 Font = new Font("Microsoft YaHei UI", 11F),
                 ForeColor = captionColor,
                 Text = caption,
-                Margin = new Padding(0, 0, 0, 0),
+                Margin = new Padding(0),
             };
 
             content.Controls.Add(valueLabel, 0, 0);
@@ -362,54 +388,308 @@ namespace PingTools
             return valueLabel;
         }
 
-        private void SeedPreviewData()
+        private async void startButton_Click(object? sender, EventArgs e)
         {
-            resultsListView.Items.Clear();
-            AddProbeResult("1", "成功", "1.1.1.1", "18 ms", "55", "15:48:01");
-            AddProbeResult("2", "成功", "1.1.1.1", "20 ms", "55", "15:48:02");
-            AddProbeResult("3", "成功", "1.1.1.1", "24 ms", "55", "15:48:03");
-            AddProbeResult("4", "抖动", "1.1.1.1", "31 ms", "55", "15:48:04");
-            AddProbeResult("5", "成功", "1.1.1.1", "23 ms", "55", "15:48:05");
+            if (isRunning)
+            {
+                return;
+            }
 
-            eventsListBox.Items.Clear();
-            eventsListBox.Items.Add("系统已就绪，等待开始探测");
-            eventsListBox.Items.Add("预览数据已载入，用于展示视觉布局");
-            eventsListBox.Items.Add("目标默认设置为 1.1.1.1");
-        }
+            var target = targetTextBox.Text.Trim();
+            if (string.IsNullOrWhiteSpace(target))
+            {
+                AddEvent("请输入有效的探测目标");
+                MessageBox.Show(this, "请输入域名或 IP 地址。", "PingTools", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
 
-        private void AddProbeResult(string seq, string status, string address, string latency, string ttl, string time)
-        {
-            resultsListView.Items.Add(new ListViewItem([seq, status, address, latency, ttl, time]));
-        }
+            ResetDashboard();
+            SetRunningState(true);
+            SetStatusBadge("LIVE  ·  RUNNING", Color.FromArgb(12, 74, 110), Color.FromArgb(186, 230, 253));
+            AddEvent($"开始探测 {target}");
 
-        private void startButton_Click(object? sender, EventArgs e)
-        {
-            headerStatusBadge.Text = "LIVE  ·  RUNNING";
-            avgValueLabel.Text = "21 ms";
-            maxValueLabel.Text = "29 ms";
-            lossValueLabel.Text = "0 %";
-            healthValueLabel.Text = "稳定";
-            eventsListBox.Items.Insert(0, $"开始探测 {targetTextBox.Text}");
-            timelineCanvas.Invalidate();
+            probeCancellation = new CancellationTokenSource();
+            try
+            {
+                await RunProbeLoopAsync(target, probeCancellation.Token);
+            }
+            finally
+            {
+                if (!IsDisposed)
+                {
+                    SetRunningState(false);
+                    probeCancellation?.Dispose();
+                    probeCancellation = null;
+                    UpdateSummary();
+                }
+            }
         }
 
         private void stopButton_Click(object? sender, EventArgs e)
         {
-            headerStatusBadge.Text = "PAUSED  ·  STOPPED";
-            healthValueLabel.Text = "已暂停";
-            eventsListBox.Items.Insert(0, "探测已停止");
+            if (!isRunning)
+            {
+                AddEvent("当前没有正在进行的探测任务");
+                return;
+            }
+
+            probeCancellation?.Cancel();
+            AddEvent("已请求停止探测");
         }
 
         private void clearButton_Click(object? sender, EventArgs e)
         {
-            resultsListView.Items.Clear();
+            if (isRunning)
+            {
+                probeCancellation?.Cancel();
+            }
+
+            ResetDashboard();
+            AddEvent("已清空历史数据");
+        }
+
+        private async Task RunProbeLoopAsync(string target, CancellationToken cancellationToken)
+        {
+            var totalCount = (int)countInput.Value;
+            var timeout = (int)timeoutInput.Value;
+            var interval = (int)intervalInput.Value;
+            var buffer = new byte[32];
+
+            using var ping = new Ping();
+            for (var attempt = 1; attempt <= totalCount; attempt++)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    SetStatusBadge("PAUSED  ·  STOPPED", Color.FromArgb(120, 53, 15), Color.FromArgb(254, 215, 170));
+                    AddEvent("探测已停止");
+                    return;
+                }
+
+                PingReply? reply = null;
+                Exception? error = null;
+                try
+                {
+                    reply = await ping.SendPingAsync(target, timeout, buffer, new PingOptions(64, true));
+                }
+                catch (PingException ex)
+                {
+                    error = ex;
+                }
+                catch (Exception ex)
+                {
+                    error = ex;
+                }
+
+                AppendProbeResult(attempt, target, reply, error);
+
+                if (attempt < totalCount)
+                {
+                    try
+                    {
+                        await Task.Delay(interval, cancellationToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        SetStatusBadge("PAUSED  ·  STOPPED", Color.FromArgb(120, 53, 15), Color.FromArgb(254, 215, 170));
+                        AddEvent("探测已停止");
+                        return;
+                    }
+                }
+            }
+
+            SetStatusBadge("DONE  ·  COMPLETED", Color.FromArgb(22, 101, 52), Color.FromArgb(220, 252, 231));
+            AddEvent($"探测完成，共 {samples.Count} 次");
+        }
+
+        private void AppendProbeResult(int sequence, string target, PingReply? reply, Exception? error)
+        {
+            var timestamp = DateTime.Now;
+            PingSample sample;
+
+            if (reply is not null && reply.Status == IPStatus.Success)
+            {
+                sample = new PingSample(
+                    sequence,
+                    "成功",
+                    reply.Address?.ToString() ?? target,
+                    reply.RoundtripTime,
+                    reply.Options?.Ttl,
+                    timestamp,
+                    IPStatus.Success);
+            }
+            else if (reply is not null)
+            {
+                sample = new PingSample(
+                    sequence,
+                    MapFailureStatus(reply.Status),
+                    reply.Address?.ToString() ?? target,
+                    null,
+                    reply.Options?.Ttl,
+                    timestamp,
+                    reply.Status);
+            }
+            else
+            {
+                sample = new PingSample(
+                    sequence,
+                    "异常",
+                    target,
+                    null,
+                    null,
+                    timestamp,
+                    null,
+                    error?.Message);
+            }
+
+            samples.Add(sample);
+            timelineSamples.Add(sample.LatencyMs);
+            if (timelineSamples.Count > MaxTimelineSamples)
+            {
+                timelineSamples.RemoveAt(0);
+            }
+
+            var item = new ListViewItem(
+            [
+                sample.Sequence.ToString(),
+                sample.StatusText,
+                sample.Address,
+                sample.LatencyMs is long latency ? $"{latency} ms" : "--",
+                sample.Ttl?.ToString() ?? "--",
+                sample.Timestamp.ToString("HH:mm:ss"),
+            ]);
+
+            if (sample.LatencyMs is null)
+            {
+                item.ForeColor = Color.FromArgb(185, 28, 28);
+            }
+
+            resultsListView.Items.Add(item);
+            if (resultsListView.Items.Count > 0)
+            {
+                resultsListView.EnsureVisible(resultsListView.Items.Count - 1);
+            }
+
+            UpdateSummary();
+
+            if (sample.LatencyMs is null)
+            {
+                AddEvent($"第 {sample.Sequence} 次探测失败: {sample.StatusText}");
+            }
+
+            timelineCanvas.Invalidate();
+        }
+
+        private void UpdateSummary()
+        {
+            var successLatencies = samples.Where(x => x.LatencyMs.HasValue).Select(x => x.LatencyMs!.Value).ToList();
+            var failureCount = samples.Count - successLatencies.Count;
+
+            avgValueLabel.Text = successLatencies.Count > 0 ? $"{successLatencies.Average():0} ms" : "--";
+            maxValueLabel.Text = successLatencies.Count > 0 ? $"{successLatencies.Max()} ms" : "--";
+            lossValueLabel.Text = samples.Count > 0 ? $"{(failureCount * 100.0 / samples.Count):0.#} %" : "--";
+            healthValueLabel.Text = ResolveHealthText(successLatencies, failureCount, samples.Count);
+
+            if (isRunning)
+            {
+                return;
+            }
+
+            if (samples.Count == 0)
+            {
+                SetStatusBadge("READY  ·  WAITING", Color.FromArgb(30, 41, 59), Color.FromArgb(125, 211, 252));
+            }
+        }
+
+        private static string ResolveHealthText(IReadOnlyCollection<long> successLatencies, int failureCount, int totalCount)
+        {
+            if (totalCount == 0)
+            {
+                return "待机";
+            }
+
+            var lossRate = totalCount == 0 ? 0 : failureCount / (double)totalCount;
+            if (lossRate >= 0.5)
+            {
+                return "异常";
+            }
+
+            if (lossRate > 0.1)
+            {
+                return "波动";
+            }
+
+            if (successLatencies.Count == 0)
+            {
+                return "不可达";
+            }
+
+            var avg = successLatencies.Average();
+            if (avg <= 50)
+            {
+                return "优良";
+            }
+
+            if (avg <= 120)
+            {
+                return "稳定";
+            }
+
+            return "偏高";
+        }
+
+        private static string MapFailureStatus(IPStatus status) =>
+            status switch
+            {
+                IPStatus.TimedOut => "超时",
+                IPStatus.DestinationHostUnreachable => "主机不可达",
+                IPStatus.DestinationNetworkUnreachable => "网络不可达",
+                IPStatus.BadRoute => "路由异常",
+                _ => status.ToString(),
+            };
+
+        private void ResetDashboard()
+        {
+            samples.Clear();
+            timelineSamples.Clear();
+            resultsListView?.Items.Clear();
+            eventsListBox?.Items.Clear();
+
             avgValueLabel.Text = "--";
             maxValueLabel.Text = "--";
             lossValueLabel.Text = "--";
             healthValueLabel.Text = "待机";
-            headerStatusBadge.Text = "READY  ·  CLEARED";
-            eventsListBox.Items.Insert(0, "已清空历史数据");
-            timelineCanvas.Invalidate();
+            SetStatusBadge("READY  ·  WAITING", Color.FromArgb(30, 41, 59), Color.FromArgb(125, 211, 252));
+
+            AddEvent("系统已就绪，等待开始探测");
+            timelineCanvas?.Invalidate();
+        }
+
+        private void SetRunningState(bool running)
+        {
+            isRunning = running;
+            startButton.Enabled = !running;
+            stopButton.Enabled = running;
+            targetTextBox.Enabled = !running;
+            countInput.Enabled = !running;
+            timeoutInput.Enabled = !running;
+            intervalInput.Enabled = !running;
+        }
+
+        private void SetStatusBadge(string text, Color backColor, Color foreColor)
+        {
+            headerStatusBadge.Text = text;
+            headerStatusBadge.BackColor = backColor;
+            headerStatusBadge.ForeColor = foreColor;
+        }
+
+        private void AddEvent(string message)
+        {
+            var text = $"{DateTime.Now:HH:mm:ss}  {message}";
+            eventsListBox.Items.Insert(0, text);
+            while (eventsListBox.Items.Count > MaxEventItems)
+            {
+                eventsListBox.Items.RemoveAt(eventsListBox.Items.Count - 1);
+            }
         }
 
         private void timelineCanvas_Paint(object? sender, PaintEventArgs e)
@@ -425,6 +705,7 @@ namespace PingTools
             using var linePen = new Pen(Color.FromArgb(14, 165, 233), 2.4F);
             using var fillBrush = new SolidBrush(Color.FromArgb(60, 14, 165, 233));
             using var pointBrush = new SolidBrush(Color.FromArgb(2, 132, 199));
+            using var failureBrush = new SolidBrush(Color.FromArgb(220, 38, 38));
 
             for (var i = 1; i < 4; i++)
             {
@@ -432,34 +713,77 @@ namespace PingTools
                 e.Graphics.DrawLine(gridPen, 10, y, area.Width - 10, y);
             }
 
-            if (resultsListView.Items.Count == 0)
+            if (timelineSamples.Count == 0)
             {
                 using var emptyBrush = new SolidBrush(Color.FromArgb(100, 116, 139));
                 e.Graphics.DrawString("暂无探测数据", new Font("Microsoft YaHei UI", 10F), emptyBrush, new PointF(16, 16));
                 return;
             }
 
-            var points = new PointF[previewLatency.Length];
-            for (var i = 0; i < previewLatency.Length; i++)
+            var successfulSamples = timelineSamples.Where(x => x.HasValue).Select(x => x!.Value).ToList();
+            var maxLatency = successfulSamples.Count > 0 ? Math.Max(successfulSamples.Max(), 10) : 10;
+            var chartLeft = 14F;
+            var chartRight = area.Width - 14F;
+            var chartBottom = area.Height - 12F;
+            var chartTop = 12F;
+            var chartHeight = chartBottom - chartTop;
+            var step = timelineSamples.Count > 1 ? (chartRight - chartLeft) / (timelineSamples.Count - 1F) : 0F;
+
+            var points = new List<PointF>();
+            for (var i = 0; i < timelineSamples.Count; i++)
             {
-                var x = 14 + i * (area.Width - 28F) / (previewLatency.Length - 1F);
-                var normalized = Math.Clamp(previewLatency[i] / 40F, 0F, 1F);
-                var y = area.Height - 16 - normalized * (area.Height - 32);
-                points[i] = new PointF(x, y);
+                var x = chartLeft + i * step;
+                if (timelineSamples[i] is long latency)
+                {
+                    var normalized = Math.Clamp(latency / (float)(maxLatency * 1.15), 0F, 1F);
+                    var y = chartBottom - normalized * chartHeight;
+                    points.Add(new PointF(x, y));
+                }
+                else
+                {
+                    e.Graphics.FillEllipse(failureBrush, x - 3F, chartBottom - 4F, 6F, 6F);
+                }
             }
 
-            using var path = new GraphicsPath();
-            path.AddLines(points);
-            var fillPoints = points.Concat([new PointF(points[^1].X, area.Height - 12), new PointF(points[0].X, area.Height - 12)]).ToArray();
+            if (points.Count == 0)
+            {
+                using var emptyBrush = new SolidBrush(Color.FromArgb(185, 28, 28));
+                e.Graphics.DrawString("当前样本均为失败请求", new Font("Microsoft YaHei UI", 10F), emptyBrush, new PointF(16, 16));
+                return;
+            }
+
+            if (points.Count == 1)
+            {
+                e.Graphics.FillEllipse(pointBrush, points[0].X - 3.2F, points[0].Y - 3.2F, 6.4F, 6.4F);
+                return;
+            }
+
+            var fillPoints = points.Concat([new PointF(points[^1].X, chartBottom), new PointF(points[0].X, chartBottom)]).ToArray();
             using var fillPath = new GraphicsPath();
             fillPath.AddPolygon(fillPoints);
             e.Graphics.FillPath(fillBrush, fillPath);
-            e.Graphics.DrawLines(linePen, points);
+            e.Graphics.DrawLines(linePen, points.ToArray());
 
             foreach (var point in points)
             {
                 e.Graphics.FillEllipse(pointBrush, point.X - 3.2F, point.Y - 3.2F, 6.4F, 6.4F);
             }
         }
+
+        private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
+        {
+            probeCancellation?.Cancel();
+            probeCancellation?.Dispose();
+        }
+
+        private sealed record PingSample(
+            int Sequence,
+            string StatusText,
+            string Address,
+            long? LatencyMs,
+            int? Ttl,
+            DateTime Timestamp,
+            IPStatus? Status = null,
+            string? ErrorMessage = null);
     }
 }
