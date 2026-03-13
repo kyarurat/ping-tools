@@ -8,4 +8,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Compile Remove="obj_verify\**\*.cs" />
+    <EmbeddedResource Remove="obj_verify\**\*" />
+    <None Remove="obj_verify\**\*" />
+  </ItemGroup>
+
 </Project>

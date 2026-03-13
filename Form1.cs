@@ -1,4 +1,5 @@
 using System.Drawing.Drawing2D;
+using System.Net;
 using System.Net.NetworkInformation;
 
 namespace PingTools
@@ -13,12 +14,14 @@ namespace PingTools
 
         private CancellationTokenSource? probeCancellation;
         private bool isRunning;
+        private bool isResolvingTarget;
 
         private Label headerStatusBadge = null!;
         private Label avgValueLabel = null!;
         private Label maxValueLabel = null!;
         private Label lossValueLabel = null!;
         private Label healthValueLabel = null!;
+        private Label healthCaptionLabel = null!;
         private TextBox targetTextBox = null!;
         private NumericUpDown countInput = null!;
         private NumericUpDown timeoutInput = null!;
@@ -29,6 +32,7 @@ namespace PingTools
         private ListView resultsListView = null!;
         private ListBox eventsListBox = null!;
         private Panel timelineCanvas = null!;
+        private Panel healthCardPanel = null!;
 
         public Form1()
         {
@@ -37,6 +41,7 @@ namespace PingTools
             ResetDashboard();
             SetRunningState(false);
             FormClosing += Form1_FormClosing;
+            Shown += (_, _) => FocusTargetInput();
         }
 
         private void BuildInterface()
@@ -87,7 +92,7 @@ namespace PingTools
                 AutoSize = true,
                 Font = new Font("Microsoft YaHei UI", 10.5F),
                 ForeColor = Color.FromArgb(148, 163, 184),
-                Text = "Visual ICMP dashboard for latency, packet loss and reachability",
+                Text = "面向实时网络诊断的 ICMP 可视化分析面板，聚焦延迟、丢包与链路可达性评估",
                 Location = new Point(27, 61),
             };
             headerStatusBadge = new Label
@@ -139,10 +144,10 @@ namespace PingTools
                 BorderStyle = BorderStyle.FixedSingle,
                 Font = new Font("Microsoft YaHei UI", 10F),
                 PlaceholderText = "输入域名或 IP，例如 1.1.1.1 / baidu.com / localhost",
-                Text = "1.1.1.1",
+                Text = string.Empty,
                 Margin = new Padding(3, 0, 16, 0),
             };
-            countInput = CreateNumeric(20, 1, 999, 1);
+            countInput = CreateNumeric(0, -9999, 9999, 1);
             timeoutInput = CreateNumeric(1000, 100, 10000, 100);
             intervalInput = CreateNumeric(1000, 100, 5000, 100);
             startButton = CreateActionButton("开始探测", Color.FromArgb(14, 165, 233), Color.White);
@@ -186,8 +191,8 @@ namespace PingTools
 
             avgValueLabel = CreateMetricCard(layout, 0, Color.FromArgb(14, 165, 233), "平均延迟", "--", Color.FromArgb(224, 242, 254));
             maxValueLabel = CreateMetricCard(layout, 1, Color.FromArgb(37, 99, 235), "峰值延迟", "--", Color.FromArgb(219, 234, 254));
-            lossValueLabel = CreateMetricCard(layout, 2, Color.FromArgb(251, 146, 60), "丢包率估计", "--", Color.FromArgb(255, 237, 213));
-            healthValueLabel = CreateMetricCard(layout, 3, Color.FromArgb(15, 118, 110), "链路健康度", "待机", Color.FromArgb(204, 251, 241));
+            lossValueLabel = CreateMetricCard(layout, 2, Color.FromArgb(251, 146, 60), "丢包率", "--", Color.FromArgb(255, 237, 213));
+            healthValueLabel = CreateMetricCard(layout, 3, Color.FromArgb(71, 85, 105), "链路状态", "待机", Color.FromArgb(226, 232, 240), isHealthCard: true);
             return layout;
         }
 
@@ -352,7 +357,7 @@ namespace PingTools
             return button;
         }
 
-        private Label CreateMetricCard(TableLayoutPanel layout, int column, Color backColor, string caption, string value, Color captionColor)
+        private Label CreateMetricCard(TableLayoutPanel layout, int column, Color backColor, string caption, string value, Color captionColor, bool isHealthCard = false)
         {
             var panel = CreateCard(backColor, new Padding(18, 16, 18, 18));
             panel.Margin = column == 0 ? new Padding(0) : new Padding(12, 0, 0, 0);
@@ -385,25 +390,32 @@ namespace PingTools
             content.Controls.Add(captionLabel, 0, 1);
             panel.Controls.Add(content);
             layout.Controls.Add(panel, column, 0);
+
+            if (isHealthCard)
+            {
+                healthCardPanel = panel;
+                healthCaptionLabel = captionLabel;
+                valueLabel.Font = new Font("Microsoft YaHei UI", 20F, FontStyle.Bold);
+            }
+
             return valueLabel;
         }
 
         private async void startButton_Click(object? sender, EventArgs e)
         {
-            if (isRunning)
+            if (isRunning || isResolvingTarget)
             {
                 return;
             }
 
             var target = targetTextBox.Text.Trim();
-            if (string.IsNullOrWhiteSpace(target))
+            ResetDashboard();
+
+            if (!await ValidateTargetAsync(target))
             {
-                AddEvent("请输入有效的探测目标");
-                MessageBox.Show(this, "请输入域名或 IP 地址。", "PingTools", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            ResetDashboard();
             SetRunningState(true);
             SetStatusBadge("LIVE  ·  RUNNING", Color.FromArgb(12, 74, 110), Color.FromArgb(186, 230, 253));
             AddEvent($"开始探测 {target}");
@@ -421,12 +433,18 @@ namespace PingTools
                     probeCancellation?.Dispose();
                     probeCancellation = null;
                     UpdateSummary();
+                    FocusTargetInput(selectAll: false);
                 }
             }
         }
 
         private void stopButton_Click(object? sender, EventArgs e)
         {
+            if (isResolvingTarget)
+            {
+                return;
+            }
+
             if (!isRunning)
             {
                 AddEvent("当前没有正在进行的探测任务");
@@ -439,6 +457,11 @@ namespace PingTools
 
         private void clearButton_Click(object? sender, EventArgs e)
         {
+            if (isResolvingTarget)
+            {
+                return;
+            }
+
             if (isRunning)
             {
                 probeCancellation?.Cancel();
@@ -446,6 +469,7 @@ namespace PingTools
 
             ResetDashboard();
             AddEvent("已清空历史数据");
+            FocusTargetInput();
         }
 
         private async Task RunProbeLoopAsync(string target, CancellationToken cancellationToken)
@@ -454,9 +478,11 @@ namespace PingTools
             var timeout = (int)timeoutInput.Value;
             var interval = (int)intervalInput.Value;
             var buffer = new byte[32];
+            var infiniteMode = totalCount <= 0;
+            var attempt = 1;
 
             using var ping = new Ping();
-            for (var attempt = 1; attempt <= totalCount; attempt++)
+            while (infiniteMode || attempt <= totalCount)
             {
                 if (cancellationToken.IsCancellationRequested)
                 {
@@ -482,7 +508,9 @@ namespace PingTools
 
                 AppendProbeResult(attempt, target, reply, error);
 
-                if (attempt < totalCount)
+                attempt++;
+
+                if (infiniteMode || attempt <= totalCount)
                 {
                     try
                     {
@@ -583,11 +611,14 @@ namespace PingTools
         {
             var successLatencies = samples.Where(x => x.LatencyMs.HasValue).Select(x => x.LatencyMs!.Value).ToList();
             var failureCount = samples.Count - successLatencies.Count;
+            var recentJitterRange = GetRecentJitterRange();
+            var healthState = ResolveHealthState(samples, successLatencies, failureCount, recentJitterRange);
 
             avgValueLabel.Text = successLatencies.Count > 0 ? $"{successLatencies.Average():0} ms" : "--";
             maxValueLabel.Text = successLatencies.Count > 0 ? $"{successLatencies.Max()} ms" : "--";
             lossValueLabel.Text = samples.Count > 0 ? $"{(failureCount * 100.0 / samples.Count):0.#} %" : "--";
-            healthValueLabel.Text = ResolveHealthText(successLatencies, failureCount, samples.Count);
+            healthValueLabel.Text = healthState.Text;
+            ApplyHealthTheme(healthState);
 
             if (isRunning)
             {
@@ -600,41 +631,75 @@ namespace PingTools
             }
         }
 
-        private static string ResolveHealthText(IReadOnlyCollection<long> successLatencies, int failureCount, int totalCount)
+        private static HealthState ResolveHealthState(IReadOnlyList<PingSample> allSamples, IReadOnlyCollection<long> successLatencies, int failureCount, long recentJitterRange)
         {
+            var totalCount = allSamples.Count;
             if (totalCount == 0)
             {
-                return "待机";
+                return new HealthState("待机", Color.FromArgb(71, 85, 105), Color.FromArgb(226, 232, 240));
             }
 
-            var lossRate = totalCount == 0 ? 0 : failureCount / (double)totalCount;
-            if (lossRate >= 0.5)
+            if (allSamples.Any(sample =>
+                sample.StatusText == "异常" ||
+                sample.Status is IPStatus.DestinationHostUnreachable or IPStatus.DestinationNetworkUnreachable or IPStatus.BadRoute))
             {
-                return "异常";
+                return new HealthState("不可达", Color.FromArgb(127, 29, 29), Color.FromArgb(254, 226, 226));
             }
 
-            if (lossRate > 0.1)
+            var lossRate = failureCount / (double)totalCount;
+            if (lossRate >= 0.05)
             {
-                return "波动";
+                return new HealthState("链路异常", Color.FromArgb(153, 27, 27), Color.FromArgb(254, 226, 226));
+            }
+
+            if (lossRate >= 0.02)
+            {
+                return new HealthState("波动", Color.FromArgb(180, 83, 9), Color.FromArgb(254, 243, 199));
             }
 
             if (successLatencies.Count == 0)
             {
-                return "不可达";
+                return new HealthState("不可达", Color.FromArgb(127, 29, 29), Color.FromArgb(254, 226, 226));
             }
 
             var avg = successLatencies.Average();
-            if (avg <= 50)
+            if (avg <= 70)
             {
-                return "优良";
+                if (recentJitterRange >= 10)
+                {
+                    return new HealthState("波动", Color.FromArgb(180, 83, 9), Color.FromArgb(254, 243, 199));
+                }
+
+                return new HealthState("优良", Color.FromArgb(21, 128, 61), Color.FromArgb(220, 252, 231));
             }
 
             if (avg <= 120)
             {
-                return "稳定";
+                if (recentJitterRange >= 15)
+                {
+                    return new HealthState("波动", Color.FromArgb(180, 83, 9), Color.FromArgb(254, 243, 199));
+                }
+
+                return new HealthState("稳定", Color.FromArgb(14, 116, 144), Color.FromArgb(207, 250, 254));
             }
 
-            return "偏高";
+            return new HealthState("偏高", Color.FromArgb(194, 65, 12), Color.FromArgb(255, 237, 213));
+        }
+
+        private long GetRecentJitterRange()
+        {
+            var recentSuccesses = samples
+                .Where(sample => sample.LatencyMs.HasValue)
+                .Select(sample => sample.LatencyMs!.Value)
+                .TakeLast(MaxTimelineSamples)
+                .ToList();
+
+            if (recentSuccesses.Count < 2)
+            {
+                return 0;
+            }
+
+            return recentSuccesses.Max() - recentSuccesses.Min();
         }
 
         private static string MapFailureStatus(IPStatus status) =>
@@ -658,6 +723,7 @@ namespace PingTools
             maxValueLabel.Text = "--";
             lossValueLabel.Text = "--";
             healthValueLabel.Text = "待机";
+            ApplyHealthTheme(new HealthState("待机", Color.FromArgb(71, 85, 105), Color.FromArgb(226, 232, 240)));
             SetStatusBadge("READY  ·  WAITING", Color.FromArgb(30, 41, 59), Color.FromArgb(125, 211, 252));
 
             AddEvent("系统已就绪，等待开始探测");
@@ -667,12 +733,108 @@ namespace PingTools
         private void SetRunningState(bool running)
         {
             isRunning = running;
-            startButton.Enabled = !running;
-            stopButton.Enabled = running;
-            targetTextBox.Enabled = !running;
-            countInput.Enabled = !running;
-            timeoutInput.Enabled = !running;
-            intervalInput.Enabled = !running;
+            RefreshControlState();
+        }
+
+        private async Task<bool> ValidateTargetAsync(string target)
+        {
+            if (string.IsNullOrWhiteSpace(target))
+            {
+                AddEvent("请输入有效的探测目标");
+                MessageBox.Show(this, "请输入 IP 地址或域名。", "PingTools", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                FocusTargetInput();
+                return false;
+            }
+
+            if (IPAddress.TryParse(target, out _))
+            {
+                return true;
+            }
+
+            if (LooksLikeInvalidIp(target))
+            {
+                AddEvent("IP 地址格式无效");
+                MessageBox.Show(this, "IP 地址格式不正确。", "PingTools", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                FocusTargetInput();
+                return false;
+            }
+
+            if (Uri.CheckHostName(target) == UriHostNameType.Unknown)
+            {
+                AddEvent("输入内容不是有效的 IP 或域名");
+                MessageBox.Show(this, "请输入格式正确的 IP 地址或域名。", "PingTools", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                FocusTargetInput();
+                return false;
+            }
+
+            SetResolvingState(true);
+            try
+            {
+                var addresses = await Dns.GetHostAddressesAsync(target);
+                if (addresses.Length == 0)
+                {
+                    AddEvent($"域名解析失败: {target}");
+                    MessageBox.Show(this, "未能解析到该域名对应的 IP 地址。", "PingTools", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    FocusTargetInput();
+                    return false;
+                }
+            }
+            catch (Exception)
+            {
+                AddEvent($"域名解析失败: {target}");
+                MessageBox.Show(this, "域名无法解析，探测任务未启动。", "PingTools", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                FocusTargetInput();
+                return false;
+            }
+            finally
+            {
+                SetResolvingState(false);
+            }
+
+            return true;
+        }
+
+        private static bool LooksLikeInvalidIp(string target)
+        {
+            if (target.Count(ch => ch == '.') == 3 && target.All(ch => char.IsDigit(ch) || ch == '.'))
+            {
+                return true;
+            }
+
+            if (target.Contains(':') && target.All(ch => Uri.IsHexDigit(ch) || ch == ':'))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private void SetResolvingState(bool resolving)
+        {
+            isResolvingTarget = resolving;
+            if (resolving)
+            {
+                healthValueLabel.Text = "域名解析中";
+                ApplyHealthTheme(new HealthState("域名解析中", Color.FromArgb(67, 56, 202), Color.FromArgb(224, 231, 255)));
+            }
+            else if (!isRunning && samples.Count == 0)
+            {
+                healthValueLabel.Text = "待机";
+                ApplyHealthTheme(new HealthState("待机", Color.FromArgb(71, 85, 105), Color.FromArgb(226, 232, 240)));
+            }
+
+            RefreshControlState();
+        }
+
+        private void RefreshControlState()
+        {
+            startButton.Enabled = !isRunning && !isResolvingTarget;
+            stopButton.Enabled = isRunning && !isResolvingTarget;
+            clearButton.Enabled = !isResolvingTarget;
+            targetTextBox.Enabled = !isRunning && !isResolvingTarget;
+            countInput.Enabled = !isRunning && !isResolvingTarget;
+            timeoutInput.Enabled = !isRunning && !isResolvingTarget;
+            intervalInput.Enabled = !isRunning && !isResolvingTarget;
         }
 
         private void SetStatusBadge(string text, Color backColor, Color foreColor)
@@ -680,6 +842,31 @@ namespace PingTools
             headerStatusBadge.Text = text;
             headerStatusBadge.BackColor = backColor;
             headerStatusBadge.ForeColor = foreColor;
+        }
+
+        private void FocusTargetInput(bool selectAll = true)
+        {
+            if (IsDisposed || !targetTextBox.CanFocus)
+            {
+                BeginInvoke(() =>
+                {
+                    if (!IsDisposed)
+                    {
+                        targetTextBox.Focus();
+                        if (selectAll && !string.IsNullOrEmpty(targetTextBox.Text))
+                        {
+                            targetTextBox.SelectAll();
+                        }
+                    }
+                });
+                return;
+            }
+
+            targetTextBox.Focus();
+            if (selectAll && !string.IsNullOrEmpty(targetTextBox.Text))
+            {
+                targetTextBox.SelectAll();
+            }
         }
 
         private void AddEvent(string message)
@@ -690,6 +877,12 @@ namespace PingTools
             {
                 eventsListBox.Items.RemoveAt(eventsListBox.Items.Count - 1);
             }
+        }
+
+        private void ApplyHealthTheme(HealthState state)
+        {
+            healthCardPanel.BackColor = state.Background;
+            healthCaptionLabel.ForeColor = state.CaptionColor;
         }
 
         private void timelineCanvas_Paint(object? sender, PaintEventArgs e)
@@ -776,6 +969,34 @@ namespace PingTools
             probeCancellation?.Dispose();
         }
 
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (isResolvingTarget)
+            {
+                return base.ProcessCmdKey(ref msg, keyData);
+            }
+
+            if (!Focused && !ContainsFocus)
+            {
+                return base.ProcessCmdKey(ref msg, keyData);
+            }
+
+            switch (keyData)
+            {
+                case Keys.Enter when !isRunning:
+                    startButton.PerformClick();
+                    return true;
+                case Keys.Escape when isRunning:
+                    stopButton.PerformClick();
+                    return true;
+                case Keys.Delete:
+                    clearButton.PerformClick();
+                    return true;
+                default:
+                    return base.ProcessCmdKey(ref msg, keyData);
+            }
+        }
+
         private sealed record PingSample(
             int Sequence,
             string StatusText,
@@ -785,5 +1006,7 @@ namespace PingTools
             DateTime Timestamp,
             IPStatus? Status = null,
             string? ErrorMessage = null);
+
+        private sealed record HealthState(string Text, Color Background, Color CaptionColor);
     }
 }
