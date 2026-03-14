@@ -60,6 +60,33 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          body: |
+            PingTools v1 初始版本，提供面向 Windows 桌面的可视化 Ping 探测能力，适合日常网络排查和网络游戏延迟检测。
+
+            当前功能：
+            - 支持输入 IP 地址或域名并执行探测
+            - 支持探测次数、超时值、间隔值配置
+            - 支持 `0` 或负数表示无限次探测
+            - 支持实时结果流、延迟波形、平均延迟、峰值延迟、丢包率和链路状态展示
+            - 支持面向游戏场景的链路状态判定
+            - 支持快捷键：`Enter` 开始、`Esc` 停止、`Delete` 清空
+            - 支持网络工具箱：
+              - Ping 本地
+              - Ping 默认网关
+              - Ping 百度
+              - Ping QQ
+              - 查看网卡、网关、DNS 信息
+              - 打开网络适配器和网络设置
+
+            Release 附件说明：
+            - `PingTools-win-x64-self-contained.exe`
+              - 自带 .NET 运行环境
+              - 目标机器无需额外安装 .NET
+              - 更适合直接分发给普通用户
+            - `PingTools-win-x64-runtime-dependent.exe`
+              - 不自带 .NET 运行环境
+              - 需要预先安装 .NET 8 Windows Desktop Runtime
+              - 适合已有运行环境的机器
           generate_release_notes: true
           files: |
             .\release-assets\PingTools-win-x64-self-contained.exe
