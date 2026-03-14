@@ -5,7 +5,7 @@ using System.Net.NetworkInformation;
 
 namespace PingTools
 {
-    public partial class Form1 : Form
+    public partial class MainWindow : Form
     {
         private const int MaxTimelineSamples = 20;
         private const int MaxEventItems = 8;
@@ -37,14 +37,14 @@ namespace PingTools
         private Panel timelineCanvas = null!;
         private Panel healthCardPanel = null!;
 
-        public Form1()
+        public MainWindow()
         {
             InitializeComponent();
             ApplyWindowIcon();
             BuildInterface();
             ResetDashboard();
             SetRunningState(false);
-            FormClosing += Form1_FormClosing;
+            FormClosing += MainWindow_FormClosing;
             Shown += (_, _) => FocusTargetInput();
         }
 
@@ -902,7 +902,7 @@ namespace PingTools
 
         private void toolsButton_Click(object? sender, EventArgs e)
         {
-            using var toolsForm = new ToolsForm(this);
+            using var toolsForm = new ToolWindow(this);
             toolsForm.ShowDialog(this);
         }
 
@@ -1033,7 +1033,7 @@ namespace PingTools
             }
         }
 
-        private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
+        private void MainWindow_FormClosing(object? sender, FormClosingEventArgs e)
         {
             probeCancellation?.Cancel();
             probeCancellation?.Dispose();

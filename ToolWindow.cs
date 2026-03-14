@@ -3,9 +3,9 @@ using System.Net.NetworkInformation;
 
 namespace PingTools
 {
-    internal sealed class ToolsForm : Form
+    internal sealed class ToolWindow : Form
     {
-        private readonly Form1 ownerForm;
+        private readonly MainWindow ownerForm;
 
         private ListView adaptersListView = null!;
         private Button pingGatewayButton = null!;
@@ -14,7 +14,7 @@ namespace PingTools
         private Button openSettingsButton = null!;
         private List<AdapterRow> adapterRows = [];
 
-        public ToolsForm(Form1 ownerForm)
+        public ToolWindow(MainWindow ownerForm)
         {
             this.ownerForm = ownerForm;
             InitializeToolsInterface();

@@ -1,6 +1,6 @@
 namespace PingTools
 {
-    partial class Form1
+    partial class MainWindow
     {
         /// <summary>
         ///  Required designer variable.
@@ -36,7 +36,7 @@ namespace PingTools
             FormBorderStyle = FormBorderStyle.FixedSingle;
             KeyPreview = true;
             MaximizeBox = false;
-            Name = "Form1";
+            Name = "MainWindow";
             StartPosition = FormStartPosition.CenterScreen;
             Text = "PingTools";
         }
