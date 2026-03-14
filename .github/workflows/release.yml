@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore .\PingTools.csproj
+
+      - name: Publish self-contained single file
+        run: >
+          dotnet publish .\PingTools.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          /p:PublishSingleFile=true
+          /p:EnableCompressionInSingleFile=true
+          /p:IncludeNativeLibrariesForSelfExtract=true
+          /p:DebugType=None
+          /p:DebugSymbols=false
+          -o .\artifacts\self-contained
+
+      - name: Publish runtime-dependent single file
+        run: >
+          dotnet publish .\PingTools.csproj
+          -c Release
+          -r win-x64
+          --self-contained false
+          /p:PublishSingleFile=true
+          /p:EnableCompressionInSingleFile=true
+          /p:DebugType=None
+          /p:DebugSymbols=false
+          -o .\artifacts\runtime-dependent
+
+      - name: Prepare release files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .\release-assets | Out-Null
+          Copy-Item .\artifacts\self-contained\PingTools.exe .\release-assets\PingTools-win-x64-self-contained.exe
+          Copy-Item .\artifacts\runtime-dependent\PingTools.exe .\release-assets\PingTools-win-x64-runtime-dependent.exe
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            .\release-assets\PingTools-win-x64-self-contained.exe
+            .\release-assets\PingTools-win-x64-runtime-dependent.exe

@@ -74,6 +74,12 @@ dotnet run
 dotnet publish PingTools.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true /p:EnableCompressionInSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true /p:DebugType=None /p:DebugSymbols=false
 ```
 
+如果需要打包为“不自带 .NET、单文件 exe”的形式，可以使用：
+
+```powershell
+dotnet publish PingTools.csproj -c Release -r win-x64 --self-contained false /p:PublishSingleFile=true /p:EnableCompressionInSingleFile=true /p:DebugType=None /p:DebugSymbols=false
+```
+
 ## 目录说明
 
 - `MainWindow.cs`
